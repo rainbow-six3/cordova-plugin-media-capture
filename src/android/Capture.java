@@ -276,7 +276,7 @@ public class Capture extends CordovaPlugin {
             imageUri = contentResolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, cv);
             LOG.d(LOG_TAG, "Taking a picture and saving to: " + imageUri.toString());
 
-            intent.putExtra(android.provider.MediaStore.EXTRA_OUTPUT, imageUri);
+            // intent.putExtra(android.provider.MediaStore.EXTRA_OUTPUT, imageUri);
 
             this.cordova.startActivityForResult((CordovaPlugin) this, intent, req.requestCode);
         }
