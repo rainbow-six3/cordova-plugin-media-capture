@@ -27,6 +27,7 @@ import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.util.Arrays;
 
+import android.content.Context;
 import android.os.Build;
 import android.os.Bundle;
 
@@ -56,6 +57,7 @@ import android.media.MediaPlayer;
 import android.net.Uri;
 import android.os.Environment;
 import android.provider.MediaStore;
+import android.support.v4.content.FileProvider;
 
 public class Capture extends CordovaPlugin {
 
@@ -81,7 +83,8 @@ public class Capture extends CordovaPlugin {
     private final PendingRequests pendingRequests = new PendingRequests();
 
     private int numPics;                            // Number of pictures before capture activity
-    private Uri imageUri;
+    Uri imageUri;
+    Uri videoUri;
 
 //    public void setContext(Context mCtx)
 //    {
@@ -183,7 +186,7 @@ public class Capture extends CordovaPlugin {
     /**
      * Get the Image specific attributes
      *
-     * @param filePath path to the file
+     * @param fileUrl path to the file
      * @param obj represents the Media File Data
      * @return a JSONObject that represents the Media File Data
      * @throws JSONException
@@ -251,16 +254,16 @@ public class Capture extends CordovaPlugin {
      */
     private void captureImage(Request req) {
         boolean needExternalStoragePermission =
-            !PermissionHelper.hasPermission(this, Manifest.permission.READ_EXTERNAL_STORAGE);
+            !PermissionHelper.hasPermission(this, Manifest.permission.WRITE_EXTERNAL_STORAGE);
 
         boolean needCameraPermission = cameraPermissionInManifest &&
             !PermissionHelper.hasPermission(this, Manifest.permission.CAMERA);
 
         if (needExternalStoragePermission || needCameraPermission) {
             if (needExternalStoragePermission && needCameraPermission) {
-                PermissionHelper.requestPermissions(this, req.requestCode, new String[]{Manifest.permission.READ_EXTERNAL_STORAGE, Manifest.permission.CAMERA});
+                PermissionHelper.requestPermissions(this, req.requestCode, new String[]{Manifest.permission.WRITE_EXTERNAL_STORAGE, Manifest.permission.CAMERA});
             } else if (needExternalStoragePermission) {
-                PermissionHelper.requestPermission(this, req.requestCode, Manifest.permission.READ_EXTERNAL_STORAGE);
+                PermissionHelper.requestPermission(this, req.requestCode, Manifest.permission.WRITE_EXTERNAL_STORAGE);
             } else {
                 PermissionHelper.requestPermission(this, req.requestCode, Manifest.permission.CAMERA);
             }
@@ -268,14 +271,13 @@ public class Capture extends CordovaPlugin {
             // Save the number of images currently on disk for later
             this.numPics = queryImgDB(whichContentStore()).getCount();
 
+
+            File imagePath = this.cordova.getActivity().getCacheDir();
+            File imageFile = new File(imagePath, "image.jpg");
+            Context context = this.cordova.getActivity().getApplicationContext();
+            imageUri = FileProvider.getUriForFile(context, "ch.surnet.treasurehunt.fileprovider", imageFile);
+
             Intent intent = new Intent(android.provider.MediaStore.ACTION_IMAGE_CAPTURE);
-
-            ContentResolver contentResolver = this.cordova.getActivity().getContentResolver();
-            ContentValues cv = new ContentValues();
-            cv.put(MediaStore.Images.Media.MIME_TYPE, IMAGE_JPEG);
-            imageUri = contentResolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, cv);
-            LOG.d(LOG_TAG, "Taking a picture and saving to: " + imageUri.toString());
-
             intent.putExtra(android.provider.MediaStore.EXTRA_OUTPUT, imageUri);
 
             this.cordova.startActivityForResult((CordovaPlugin) this, intent, req.requestCode);
@@ -294,7 +296,14 @@ public class Capture extends CordovaPlugin {
         if(cameraPermissionInManifest && !PermissionHelper.hasPermission(this, Manifest.permission.CAMERA)) {
             PermissionHelper.requestPermission(this, req.requestCode, Manifest.permission.CAMERA);
         } else {
+            File cachePath = this.cordova.getActivity().getCacheDir();
+            File videoFile = new File(cachePath, "movie.mp4");
+            Context context = this.cordova.getActivity().getApplicationContext();
+            videoUri = FileProvider.getUriForFile(context, "ch.surnet.treasurehunt.fileprovider", videoFile);
+
             Intent intent = new Intent(android.provider.MediaStore.ACTION_VIDEO_CAPTURE);
+            intent.putExtra(android.provider.MediaStore.EXTRA_OUTPUT, videoUri);
+
 
             if(Build.VERSION.SDK_INT > 7){
                 intent.putExtra("android.intent.extra.durationLimit", req.duration);
@@ -329,7 +338,7 @@ public class Capture extends CordovaPlugin {
                             onImageActivityResult(req);
                             break;
                         case CAPTURE_VIDEO:
-                            onVideoActivityResult(req, intent);
+                            onVideoActivityResult(req);
                             break;
                     }
                 }
@@ -378,10 +387,9 @@ public class Capture extends CordovaPlugin {
     }
 
     public void onImageActivityResult(Request req) {
-        // Add image to results
         req.results.put(createMediaFile(imageUri));
 
-        checkForDuplicateImage();
+        //checkForDuplicateImage();
 
         if (req.results.length() >= req.limit) {
             // Send Uri back to JavaScript for viewing image
@@ -392,33 +400,15 @@ public class Capture extends CordovaPlugin {
         }
     }
 
-    public void onVideoActivityResult(Request req, Intent intent) {
-        Uri data = null;
+    public void onVideoActivityResult(Request req) {
+        req.results.put(createMediaFile(videoUri));
 
-        if (intent != null){
-            // Get the uri of the video clip
-            data = intent.getData();
-        }
-
-        if( data == null){
-            File movie = new File(getTempDirectoryPath(), "Capture.avi");
-            data = Uri.fromFile(movie);
-        }
-
-        // create a file object from the uri
-        if(data == null) {
-            pendingRequests.resolveWithFailure(req, createErrorObject(CAPTURE_NO_MEDIA_FILES, "Error: data is null"));
-        }
-        else {
-            req.results.put(createMediaFile(data));
-
-            if (req.results.length() >= req.limit) {
-                // Send Uri back to JavaScript for viewing video
-                pendingRequests.resolveWithSuccess(req);
-            } else {
-                // still need to capture more video clips
-                captureVideo(req);
-            }
+        if (req.results.length() >= req.limit) {
+            // Send Uri back to JavaScript for viewing video
+            pendingRequests.resolveWithSuccess(req);
+        } else {
+            // still need to capture more video clips
+            captureVideo(req);
         }
     }
 
@@ -430,7 +420,8 @@ public class Capture extends CordovaPlugin {
      * @throws IOException
      */
     private JSONObject createMediaFile(Uri data) {
-        File fp = webView.getResourceApi().mapUriToFile(data);
+        File name = new File(data.getPath());
+        File fp = new File(this.cordova.getActivity().getCacheDir(), name.getName());
         JSONObject obj = new JSONObject();
 
         Class webViewClass = webView.getClass();
